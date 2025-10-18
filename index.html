@@ -7,13 +7,40 @@
     <!-- Memuat Firebase SDKs -->
     <script type="module">
         import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // MEMPERBAIKI: Mengimpor Timestamp, doc, dan deleteDoc dari Firestore
-        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, Timestamp, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // MEMPERBAIKI: Mengimpor Timestamp dari Firestore
+        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // Konstanta global dari lingkungan Canvas (JANGAN DIUBAH)
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // =================================================================================
+        // PERHATIAN: KONFIGURASI FIREBASE PORTABLE
+        // Ketika di-host di luar lingkungan Canvas (misalnya, GitHub Pages), 
+        // Anda HARUS MENGGANTI PLACEHOLDER di bawah ini dengan kredensial Firebase Anda sendiri.
+        // =================================================================================
+        const PORTABLE_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyBqBOnZOXxAjmd7FIgdtd-h0Vaded9jyfc", // <--- GANTI INI
+            authDomain: "catatan-lari-57b36.firebaseapp.com",
+            projectId: "catatan-lari-57b36",
+            storageBucket: "catatan-lari-57b36.firebasestorage.app",
+            messagingSenderId: "632640378137",
+            appId: "1:632640378137:web:158ed9b27394aab89ee188" // <--- GANTI INI
+        };
+        // =================================================================================
+        
+        // Logika untuk lingkungan Canvas atau Portable
+        const isCanvasEnvironment = typeof __firebase_config !== 'undefined';
+        
+        let firebaseConfig;
+        let appId;
+        
+        if (isCanvasEnvironment) {
+            // Gunakan konfigurasi Canvas
+            firebaseConfig = JSON.parse(__firebase_config);
+            appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        } else {
+            // Gunakan konfigurasi Portable (untuk GitHub Pages)
+            firebaseConfig = PORTABLE_FIREBASE_CONFIG;
+            appId = PORTABLE_FIREBASE_CONFIG.projectId || 'portable-run-tracker';
+        }
 
         // Variabel global untuk Firebase
         window.db = null;
@@ -71,19 +98,10 @@
                 
                 const card = `
                     <div class="bg-white p-4 rounded-lg shadow-md border-l-4 ${index === 0 ? 'border-primary' : 'border-gray-400'}">
-                        <div class="flex justify-between items-center mb-2">
+                        <div class="flex justify-between items-start mb-2">
                             <h3 class="text-lg font-bold text-gray-800">Lari #${runs.length - index}</h3>
-                            <button 
-                                onclick="deleteRun('${run.id}')" 
-                                class="text-red-500 hover:text-red-700 p-1 rounded-full hover:bg-red-50 transition duration-150"
-                                title="Hapus Lari Ini"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.166 2.007 12.042a.75.75 0 0 1-.502.772l-8.071 1.257a.75.75 0 0 1-.502-.772L15.74 6.788m-1.022-.166L12 3.5m0 0-1.74 2.128M12 3.5v3.288" />
-                                </svg>
-                            </button>
+                            <span class="text-sm text-gray-500">${runDate}</span>
                         </div>
-                        <span class="text-sm text-gray-500 block mb-2">${runDate}</span>
                         <div class="grid grid-cols-2 gap-y-2 text-sm">
                             <div><span class="font-medium">Jarak:</span> <span class="text-primary">${run.distance} km</span></div>
                             <div><span class="font-medium">Durasi:</span> <span>${run.duration}</span></div>
@@ -279,13 +297,13 @@
 
             document.getElementById('saveButton').disabled = true;
 
+            // Pastikan path menggunakan AppId yang benar (baik dari Canvas atau Portable Config)
             const collectionPath = `artifacts/${appId}/users/${window.userId}/runs`;
             try {
                 // Simpan ke Firestore
                 await addDoc(collection(window.db, collectionPath), {
                     ...newRun,
                     timestamp: runTimestamp, // Menggunakan timestamp yang dikonversi dari tanggal lari
-                    // Tambahkan tanggal dalam format string juga, untuk cadangan jika diperlukan (opsional)
                     runDateString: inputDateValue 
                 });
                 window.showMessageBox("Data lari berhasil disimpan dan ditambahkan ke riwayat!");
@@ -299,26 +317,6 @@
                 document.getElementById('saveButton').disabled = false;
             }
         }
-        
-        // --- Fungsi Penghapus Data (Dibuat global) ---
-        window.deleteRun = async function(runId) {
-            if (!window.isAuthReady || !window.db || !window.userId) {
-                window.showMessageBox("Database belum siap. Tunggu sebentar.");
-                return;
-            }
-
-            // Konfirmasi sederhana melalui tombol yang disengaja.
-            const collectionPath = `artifacts/${appId}/users/${window.userId}/runs`;
-            const docRef = doc(window.db, collectionPath, runId);
-            
-            try {
-                await deleteDoc(docRef);
-                window.showMessageBox("Data lari berhasil dihapus dari riwayat!");
-            } catch (e) {
-                console.error("Error deleting document: ", e);
-                window.showMessageBox("Gagal menghapus data: " + e.message);
-            }
-        }
 
         // --- Inisialisasi Firebase ---
         function initFirebase() {
@@ -326,10 +324,14 @@
                 const app = initializeApp(firebaseConfig);
                 window.db = getFirestore(app);
                 window.auth = getAuth(app);
-                setLogLevel('Debug'); 
+                // Hanya set log level jika di lingkungan Canvas untuk debugging
+                if (isCanvasEnvironment) {
+                    setLogLevel('Debug'); 
+                }
             } catch(e) {
-                 window.showMessageBox('Gagal menginisialisasi Firebase. Cek konsol untuk detail.');
+                 window.showMessageBox('Gagal menginisialisasi Firebase. Pastikan konfigurasi (PORTABLE_FIREBASE_CONFIG) sudah benar. Cek konsol untuk detail.');
                  console.error("Firebase init error: ", e);
+                 return; // Hentikan jika inisialisasi gagal
             }
 
             onAuthStateChanged(window.auth, async (user) => {
@@ -337,16 +339,20 @@
                     if (user) {
                         window.userId = user.uid;
                     } else {
-                        if (typeof __initial_auth_token !== 'undefined') {
+                        // LOGIKA AUTHENTIKASI YANG PORTABLE
+                        if (isCanvasEnvironment && typeof __initial_auth_token !== 'undefined') {
+                            // Otentikasi Canvas menggunakan token kustom
+                            const { signInWithCustomToken } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
                             await signInWithCustomToken(window.auth, __initial_auth_token);
                         } else {
+                            // Otentikasi standar (Anonim) untuk lingkungan portable
                             await signInAnonymously(window.auth);
                         }
                         window.userId = window.auth.currentUser.uid;
                     }
                 } catch(e) {
-                    // Fallback to anonymous if custom token fails
-                    console.error("Auth error, signing in anonymously: ", e);
+                    console.error("Auth error, trying anonymous sign-in: ", e);
+                    // Selalu fallback ke anonim jika terjadi kegagalan
                     await signInAnonymously(window.auth);
                     window.userId = window.auth.currentUser.uid;
                 }
