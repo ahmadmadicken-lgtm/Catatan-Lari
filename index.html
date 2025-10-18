@@ -27,9 +27,9 @@
         // =================================================================================
         // PERHATIAN: KONFIGURASI GEMINI API PORTABLE
         // Kunci ini digunakan untuk Gemini (Ekstraksi Gambar) di GitHub.
-        // GANTI NILAI DI BAWAH DENGAN KUNCI GEMINI API ANDA!
+        // GANTI NILAI DI BAWAH DENGAN KUNCI GEMINI API ANDA YANG VALID!
         // =================================================================================
-        const PORTABLE_GEMINI_API_KEY = "AIzaSyA0bb6vIkyq00p4Vx2pwMAnMBoho1scI0Q"; 
+        const PORTABLE_GEMINI_API_KEY = "AIzaSyBJAovs83Fqow84pUoW28D9qKIxbjWh90k"; // KEMBALI KE PLACEHOLDER
         
         
         // Logika untuk lingkungan Canvas atau Portable
@@ -219,7 +219,7 @@
                         if (!response.ok) {
                             // Tangkap 403 secara eksplisit dan berikan pesan bantuan.
                             if (response.status === 403) {
-                                throw new Error(`Akses ditolak (HTTP 403). Pastikan kunci Gemini API Anda telah diatur dengan benar.`);
+                                throw new Error(`Akses ditolak (HTTP 403). Pastikan kunci Gemini API Anda telah diatur dengan benar dan layanan Gemini API telah diaktifkan di proyek Anda.`);
                             }
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
