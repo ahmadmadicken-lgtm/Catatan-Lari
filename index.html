@@ -13,7 +13,7 @@
         
         // =================================================================================
         // PERHATIAN: KONFIGURASI FIREBASE PORTABLE
-        // Konfigurasi ini HANYA digunakan untuk FIREBASE, BUKAN untuk Gemini API.
+        // Kunci-kunci ini digunakan untuk Firebase (Database).
         // =================================================================================
         const PORTABLE_FIREBASE_CONFIG = {
             apiKey: "AIzaSyBqBOnZOXxAjmd7FIgdtd-h0Vaded9jyfc", // KUNCI FIREBASE ANDA
@@ -23,22 +23,34 @@
             messagingSenderId: "632640378137",
             appId: "1:632640378137:web:158ed9b27394aab89ee188" // KUNCI FIREBASE ANDA
         };
+        
         // =================================================================================
+        // PERHATIAN: KONFIGURASI GEMINI API PORTABLE
+        // Kunci ini digunakan untuk Gemini (Ekstraksi Gambar) di GitHub.
+        // GANTI NILAI DI BAWAH DENGAN KUNCI GEMINI API ANDA!
+        // =================================================================================
+        const PORTABLE_GEMINI_API_KEY = "AIzaSyA0bb6vIkyq00p4Vx2pwMAnMBoho1scI0Q"; 
+        
         
         // Logika untuk lingkungan Canvas atau Portable
         const isCanvasEnvironment = typeof __firebase_config !== 'undefined';
         
         let firebaseConfig;
         let appId;
+        let geminiApiKey; // Variabel baru
         
         if (isCanvasEnvironment) {
             // Gunakan konfigurasi Canvas
             firebaseConfig = JSON.parse(__firebase_config);
             appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            // Di Canvas, kuncinya harus kosong agar sistem menyuntikkan otorisasi
+            geminiApiKey = ""; 
         } else {
             // Gunakan konfigurasi Portable (untuk GitHub Pages)
             firebaseConfig = PORTABLE_FIREBASE_CONFIG;
             appId = PORTABLE_FIREBASE_CONFIG.projectId || 'portable-run-tracker';
+            // Di GitHub, gunakan kunci yang dimasukkan pengguna
+            geminiApiKey = PORTABLE_GEMINI_API_KEY; 
         }
 
         // Variabel global untuk Firebase
@@ -48,12 +60,10 @@
         window.isAuthReady = false;
         window.allStoredRuns = [];
         
+        // URL API sekarang menggunakan kunci yang ditentukan di atas
+        const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${geminiApiKey}`;
         // =================================================================================
-        // PENTING UNTUK GEMINI API: KUNCI HARUS KOSONG DI LINGKUNGAN CANVAS
-        // JANGAN MENGGANTI NILAI INI.
-        // =================================================================================
-        const apiKey = ""; // KUNCI HARUS KOSONG AGAR SISTEM DAPAT MENYUNTIKKAN KUNCI GEMINI
-        const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        // SISA KODE GEMINI/FIREBASE TIDAK BERUBAH
         // =================================================================================
 
         // Data Lari Awal (Template untuk input manual) - Didefinisikan namun tidak digunakan untuk mengisi form awal
@@ -148,6 +158,11 @@
             loadingIndicator.classList.remove('hidden');
 
             try {
+                // Periksa apakah kunci Gemini tersedia di lingkungan portable
+                if (!isCanvasEnvironment && geminiApiKey === "GANTI_DENGAN_KUNCI_GEMINI_ANDA_UNTUK_GITHUB") {
+                    throw new Error("Kunci Gemini API belum diatur. Harap ganti placeholder di kode.");
+                }
+
                 const { data: base64Data, mimeType } = await fileToBase64(file);
 
                 // INSTRUKSI DITINGKATKAN: Meminta model AI untuk memastikan tanggal yang diekstrak adalah tanggal lari, bukan tanggal hari ini, dan mengasumsikan tahun saat ini jika tidak ada.
@@ -204,7 +219,7 @@
                         if (!response.ok) {
                             // Tangkap 403 secara eksplisit dan berikan pesan bantuan.
                             if (response.status === 403) {
-                                throw new Error(`Akses ditolak (HTTP 403). Pastikan 'const apiKey' untuk Gemini API di kode Anda kosong ("").`);
+                                throw new Error(`Akses ditolak (HTTP 403). Pastikan kunci Gemini API Anda telah diatur dengan benar.`);
                             }
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
