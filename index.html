@@ -56,7 +56,7 @@
         const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
         // =================================================================================
 
-        // Data Lari Awal (Template untuk input manual)
+        // Data Lari Awal (Template untuk input manual) - Didefinisikan namun tidak digunakan untuk mengisi form awal
         window.INITIAL_RUN_DATA = {
             distance: "5.00", 
             duration: "58:10",
@@ -466,15 +466,8 @@
             // Set input date/time ke waktu saat ini
             document.getElementById('inputDate').value = new Date().toISOString().substring(0, 16);
             
-            // Isi form dengan data template untuk input manual pertama kali
-            if (window.INITIAL_RUN_DATA) { 
-                document.getElementById('inputDistance').value = window.INITIAL_RUN_DATA.distance;
-                document.getElementById('inputDuration').value = window.INITIAL_RUN_DATA.duration;
-                document.getElementById('inputPace').value = window.INITIAL_RUN_DATA.pace;
-                document.getElementById('inputHR').value = window.INITIAL_RUN_DATA.hr;
-                document.getElementById('inputCalories').value = window.INITIAL_RUN_DATA.calories;
-                document.getElementById('inputElevation').value = window.INITIAL_RUN_DATA.elevation;
-            }
+            // Menghapus inisialisasi awal nilai-nilai metrik agar tampilan form kosong.
+            // Data akan diisi oleh fungsi ekstraksi gambar atau input manual.
         });
     </script>
 </head>
