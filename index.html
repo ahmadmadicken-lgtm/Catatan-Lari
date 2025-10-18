@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Riwayat Lari & Ekspor Spreadsheet</title>
+    <!-- Memuat Firebase SDKs -->
+    <script type="module">
+        import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // MEMPERBAIKI: Mengimpor Timestamp, doc, dan deleteDoc dari Firestore
+        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, Timestamp, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Konstanta global dari lingkungan Canvas (JANGAN DIUBAH)
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // Variabel global untuk Firebase
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+        window.isAuthReady = false;
+        window.allStoredRuns = [];
+        
+        // Konstanta untuk API Gemini
+        const apiKey = ""; // Disediakan oleh Canvas secara otomatis saat runtime
+        const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+        // Data Lari Awal (Template untuk input manual)
+        window.INITIAL_RUN_DATA = {
+            distance: "5.00", 
+            duration: "58:10",
+            pace: "11:38",
+            hr: "135",
+            calories: "272",
+            elevation: "27",
+            date: "16/10/2025 08:03"
+        };
+
+        // --- Fungsi Utility Message Box (Dibuat global) ---
+        window.showMessageBox = function(message) {
+            const messageBox = document.getElementById('messageBox');
+            const messageText = document.getElementById('messageText');
+            
+            messageText.textContent = message;
+            messageBox.classList.remove('hidden');
+        }
+
+        window.closeMessageBox = function() {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.classList.add('hidden');
+        }
+
+        // --- Fungsi Rendering Riwayat Lari ---
+        function renderRunHistory(runs) {
+            const historyContainer = document.getElementById('runHistoryContainer');
+            const exportButton = document.getElementById('exportButton');
+            historyContainer.innerHTML = '';
+            
+            if (runs.length === 0) {
+                historyContainer.innerHTML = '<p class="text-gray-500 italic text-center p-4">Belum ada riwayat lari. Silakan simpan lari pertama Anda!</p>';
+                exportButton.classList.add('hidden');
+                return;
+            }
+
+            exportButton.classList.remove('hidden');
+
+            runs.forEach((run, index) => {
+                // run.timestamp sekarang dijamin berisi tanggal lari yang benar (hasil ekstraksi/input)
+                const runDate = run.timestamp ? new Date(run.timestamp.toMillis()).toLocaleString('id-ID') : 'N/A';
+                
+                const card = `
+                    <div class="bg-white p-4 rounded-lg shadow-md border-l-4 ${index === 0 ? 'border-primary' : 'border-gray-400'}">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-lg font-bold text-gray-800">Lari #${runs.length - index}</h3>
+                            <button 
+                                onclick="deleteRun('${run.id}')" 
+                                class="text-red-500 hover:text-red-700 p-1 rounded-full hover:bg-red-50 transition duration-150"
+                                title="Hapus Lari Ini"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.166 2.007 12.042a.75.75 0 0 1-.502.772l-8.071 1.257a.75.75 0 0 1-.502-.772L15.74 6.788m-1.022-.166L12 3.5m0 0-1.74 2.128M12 3.5v3.288" />
+                                </svg>
+                            </button>
+                        </div>
+                        <span class="text-sm text-gray-500 block mb-2">${runDate}</span>
+                        <div class="grid grid-cols-2 gap-y-2 text-sm">
+                            <div><span class="font-medium">Jarak:</span> <span class="text-primary">${run.distance} km</span></div>
+                            <div><span class="font-medium">Durasi:</span> <span>${run.duration}</span></div>
+                            <div><span class="font-medium">Pace:</span> <span>${run.pace} min/km</span></div>
+                            <div><span class="font-medium">Kalori:</span> <span>${run.calories} kcal</span></div>
+                        </div>
+                    </div>
+                `;
+                historyContainer.innerHTML += card;
+            });
+        }
+
+        // --- Helper: Convert File to Base64 ---
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                // Batasi MIME type untuk image/jpeg atau image/png
+                const mimeType = file.type === 'image/jpeg' || file.type === 'image/png' ? file.type : 'image/png';
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve({
+                    data: reader.result.split(',')[1],
+                    mimeType: mimeType
+                });
+                reader.onerror = error => reject(error);
+            });
+        }
+        
+        // --- Fungsi Ekstraksi Data dari Gambar (Dibuat global) ---
+        window.extractDataFromImage = async function() {
+            const imageInput = document.getElementById('imageUpload');
+            const file = imageInput.files[0];
+            const loadingIndicator = document.getElementById('loadingIndicator');
+            const extractButton = document.getElementById('extractButton');
+
+            if (!file) {
+                window.showMessageBox("Harap pilih file gambar (*.jpg atau *.png) terlebih dahulu.");
+                return;
+            }
+
+            extractButton.disabled = true;
+            loadingIndicator.classList.remove('hidden');
+
+            try {
+                const { data: base64Data, mimeType } = await fileToBase64(file);
+
+                // INSTRUKSI DITINGKATKAN: Meminta model AI untuk memastikan tanggal yang diekstrak adalah tanggal lari, bukan tanggal hari ini, dan mengasumsikan tahun saat ini jika tidak ada.
+                const systemPrompt = `Anda adalah ekstrak data ahli. Anda akan diberikan screenshot dari aplikasi lari (MapMyRun, Strava, atau sejenisnya). Tugas Anda adalah mengekstrak metrik utama berikut dan mengembalikannya sebagai objek JSON yang sesuai dengan skema yang diberikan: Jarak (distance) dalam km, Durasi (duration) dalam format MM:SS atau HH:MM:SS, Pace (pace) dalam format MM:SS/km, Detak Jantung Rata-rata (hr) dalam bpm, Kalori (calories) dalam kcal, Kenaikan Elevasi (elevation) dalam meter, dan Tanggal/Waktu Lari (date) dalam format ISO 8601 (YYYY-MM-DDTHH:MM) untuk input HTML 'datetime-local'. JIKA TAHUN TIDAK TERLIHAT DI GAMBAR, ASUMSIKAN TAHUN SAAT INI (2025). Pastikan output selalu JSON valid. Jika metrik tidak ditemukan, gunakan string kosong.`;
+                const userQuery = "Ekstrak semua metrik lari yang terlihat dari gambar ini ke dalam format JSON yang diminta. Pastikan nilai 'date' adalah tanggal lari yang tercatat di screenshot.";
+
+                const payload = {
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [
+                                { text: userQuery },
+                                {
+                                    inlineData: {
+                                        mimeType: mimeType,
+                                        data: base64Data
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    systemInstruction: {
+                        parts: [{ text: systemPrompt }]
+                    },
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                "distance": { "type": "STRING", "description": "Distance in km, e.g., '5.00'" },
+                                "duration": { "type": "STRING", "description": "Duration in MM:SS or HH:MM:SS, e.g., '58:10'" },
+                                "pace": { "type": "STRING", "description": "Pace in MM:SS/km, e.g., '11:38'" },
+                                "hr": { "type": "STRING", "description": "Average Heart Rate in bpm, e.g., '135'" },
+                                "calories": { "type": "STRING", "description": "Calories burned in kcal, e.g., '272'" },
+                                "elevation": { "type": "STRING", "description": "Elevation gain in meters, e.g., '27'" },
+                                "date": { "type": "STRING", "description": "Run start datetime in ISO 8601 format (YYYY-MM-DDTHH:MM), e.g., '2025-10-16T08:03'" }
+                            },
+                            required: ["distance", "duration"]
+                        }
+                    }
+                };
+
+                // Lakukan retry dengan exponential backoff
+                const maxRetries = 3;
+                let lastError = null;
+                for (let i = 0; i < maxRetries; i++) {
+                    try {
+                        const response = await fetch(GEMINI_API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+
+                        const result = await response.json();
+                        const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                        
+                        if (!jsonText) {
+                            throw new Error("Model tidak mengembalikan data JSON yang valid.");
+                        }
+
+                        const extractedData = JSON.parse(jsonText);
+
+                        // Isi formulir dengan data yang diekstrak
+                        document.getElementById('inputDistance').value = extractedData.distance || '';
+                        document.getElementById('inputDuration').value = extractedData.duration || '';
+                        document.getElementById('inputPace').value = extractedData.pace || '';
+                        document.getElementById('inputHR').value = extractedData.hr || '';
+                        document.getElementById('inputCalories').value = extractedData.calories || '';
+                        document.getElementById('inputElevation').value = extractedData.elevation || '';
+                        
+                        // LOGIKA PENGISIAN TANGGAL
+                        if (extractedData.date) {
+                            // Gunakan tanggal yang diekstrak dari screenshot
+                            document.getElementById('inputDate').value = extractedData.date.substring(0, 16);
+                        } else {
+                            // Jika ekstraksi tanggal gagal, gunakan tanggal hari ini sebagai fallback
+                            document.getElementById('inputDate').value = new Date().toISOString().substring(0, 16);
+                        }
+
+                        window.showMessageBox("Data lari berhasil diekstrak dan mengisi formulir. Harap verifikasi dan perbaiki data yang mungkin salah sebelum menekan 'Simpan'.");
+                        return; // Berhasil, keluar dari fungsi
+                        
+                    } catch (error) {
+                        lastError = error;
+                        console.error(`Attempt ${i + 1} failed:`, error);
+                        if (i < maxRetries - 1) {
+                            const delay = Math.pow(2, i) * 1000;
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                        }
+                    }
+                }
+                
+                // Jika semua percobaan gagal
+                throw new Error(`Semua percobaan ekstraksi gagal. ${lastError.message}`);
+
+            } catch (error) {
+                console.error("Error during image data extraction:", error);
+                window.showMessageBox(`Gagal memproses gambar. Detail: ${error.message}.`);
+            } finally {
+                extractButton.disabled = false;
+                loadingIndicator.classList.add('hidden');
+            }
+        }
+        
+        // --- Fungsi Penyimpanan Data (Dibuat global) ---
+        window.saveNewRun = async function() {
+            if (!window.isAuthReady || !window.db || !window.userId) {
+                window.showMessageBox("Database sedang diinisialisasi. Tunggu sebentar.");
+                return;
+            }
+
+            // Ambil nilai dari input form
+            const inputDateValue = document.getElementById('inputDate').value;
+            const newRun = {
+                distance: document.getElementById('inputDistance').value,
+                duration: document.getElementById('inputDuration').value,
+                pace: document.getElementById('inputPace').value,
+                hr: document.getElementById('inputHR').value,
+                calories: document.getElementById('inputCalories').value,
+                elevation: document.getElementById('inputElevation').value,
+                // Kita akan menggunakan inputDateValue untuk membuat field 'timestamp' yang benar
+            };
+
+            // Validasi sederhana (pastikan setidaknya Jarak dan Durasi terisi)
+            if (!newRun.distance || !newRun.duration) {
+                window.showMessageBox("Harap isi setidaknya Jarak dan Durasi.");
+                return;
+            }
+
+            // LOGIKA PERBAIKAN: Konversi tanggal lari yang diekstrak menjadi Firestore Timestamp.
+            let runTimestamp;
+            try {
+                if (inputDateValue) {
+                    // Konversi string ISO 8601 dari input HTML ke JS Date
+                    const runDate = new Date(inputDateValue);
+                    // Konversi JS Date ke Firestore Timestamp
+                    runTimestamp = Timestamp.fromDate(runDate);
+                } else {
+                    // Jika input tanggal kosong, gunakan waktu server saat ini
+                    runTimestamp = serverTimestamp();
+                }
+            } catch (e) {
+                console.error("Error converting date to timestamp, using server time:", e);
+                runTimestamp = serverTimestamp();
+            }
+
+            document.getElementById('saveButton').disabled = true;
+
+            const collectionPath = `artifacts/${appId}/users/${window.userId}/runs`;
+            try {
+                // Simpan ke Firestore
+                await addDoc(collection(window.db, collectionPath), {
+                    ...newRun,
+                    timestamp: runTimestamp, // Menggunakan timestamp yang dikonversi dari tanggal lari
+                    // Tambahkan tanggal dalam format string juga, untuk cadangan jika diperlukan (opsional)
+                    runDateString: inputDateValue 
+                });
+                window.showMessageBox("Data lari berhasil disimpan dan ditambahkan ke riwayat!");
+                // Opsional: reset form setelah simpan
+                document.getElementById('runForm').reset(); 
+                document.getElementById('inputDate').value = new Date().toISOString().substring(0, 16); // Reset date input untuk lari berikutnya
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                window.showMessageBox("Gagal menyimpan data: " + e.message);
+            } finally {
+                document.getElementById('saveButton').disabled = false;
+            }
+        }
+        
+        // --- Fungsi Penghapus Data (Dibuat global) ---
+        window.deleteRun = async function(runId) {
+            if (!window.isAuthReady || !window.db || !window.userId) {
+                window.showMessageBox("Database belum siap. Tunggu sebentar.");
+                return;
+            }
+
+            // Konfirmasi sederhana melalui tombol yang disengaja.
+            const collectionPath = `artifacts/${appId}/users/${window.userId}/runs`;
+            const docRef = doc(window.db, collectionPath, runId);
+            
+            try {
+                await deleteDoc(docRef);
+                window.showMessageBox("Data lari berhasil dihapus dari riwayat!");
+            } catch (e) {
+                console.error("Error deleting document: ", e);
+                window.showMessageBox("Gagal menghapus data: " + e.message);
+            }
+        }
+
+        // --- Inisialisasi Firebase ---
+        function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                window.db = getFirestore(app);
+                window.auth = getAuth(app);
+                setLogLevel('Debug'); 
+            } catch(e) {
+                 window.showMessageBox('Gagal menginisialisasi Firebase. Cek konsol untuk detail.');
+                 console.error("Firebase init error: ", e);
+            }
+
+            onAuthStateChanged(window.auth, async (user) => {
+                try {
+                    if (user) {
+                        window.userId = user.uid;
+                    } else {
+                        if (typeof __initial_auth_token !== 'undefined') {
+                            await signInWithCustomToken(window.auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(window.auth);
+                        }
+                        window.userId = window.auth.currentUser.uid;
+                    }
+                } catch(e) {
+                    // Fallback to anonymous if custom token fails
+                    console.error("Auth error, signing in anonymously: ", e);
+                    await signInAnonymously(window.auth);
+                    window.userId = window.auth.currentUser.uid;
+                }
+                
+                window.isAuthReady = true;
+                document.getElementById('userIdDisplay').textContent = window.userId;
+                setupFirestoreListener();
+            });
+        }
+        
+        // --- Listener Firestore ---
+        let unsubscribe = null;
+        function setupFirestoreListener() {
+            if (!window.db || !window.userId) return;
+
+            if (unsubscribe) unsubscribe(); 
+
+            // Path untuk menyimpan data lari pribadi
+            const collectionPath = `artifacts/${appId}/users/${window.userId}/runs`;
+            const q = query(collection(window.db, collectionPath)); 
+
+            unsubscribe = onSnapshot(q, (querySnapshot) => {
+                let allRuns = [];
+                querySnapshot.forEach((doc) => {
+                    allRuns.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // Urutkan manual berdasarkan timestamp (DESC)
+                allRuns.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+
+                window.allStoredRuns = allRuns; 
+                renderRunHistory(allRuns); 
+            }, (error) => {
+                console.error("Error fetching documents: ", error);
+                window.showMessageBox("Gagal memuat riwayat data lari.");
+            });
+        }
+
+        // --- Fungsi Ekspor Global ---
+        window.exportToSpreadsheet = function() {
+            if (window.allStoredRuns.length === 0) {
+                window.showMessageBox("Tidak ada data lari yang tersimpan untuk diekspor.");
+                return;
+            }
+
+            // Header CSV (Tambahkan kolom Date dan ID)
+            let csvContent = "ID Lari,Tanggal Lari,Jarak (km),Durasi (min:detik),Pace (min/km),HR (bpm),Kalori (kcal),Elevation Gain (m)\n";
+
+            // Baris data dari semua larian
+            window.allStoredRuns.forEach((run, index) => {
+                // Konversi timestamp FireStore ke string tanggal yang lebih mudah dibaca
+                const dateString = run.timestamp ? new Date(run.timestamp.toMillis()).toLocaleString('id-ID') : (run.runDateString || 'N/A');
+                
+                // Baris data untuk satu kali lari
+                csvContent += `${run.id},"${dateString}",${run.distance},"${run.duration}","${run.pace}",${run.hr},${run.calories},${run.elevation}\n`;
+            });
+
+            // Menyalin ke clipboard
+            const textarea = document.createElement('textarea');
+            textarea.value = csvContent;
+            document.body.appendChild(textarea);
+            textarea.select();
+
+            try {
+                document.execCommand('copy');
+                window.showMessageBox("Riwayat data lari (" + window.allStoredRuns.length + " entri) berhasil disalin ke clipboard!\n\nAnda dapat menempelkannya ke Excel/Google Sheets dan menggunakan fitur 'Text to Columns' jika pemisah koma tidak dikenali secara otomatis.");
+            } catch (err) {
+                window.showMessageBox("Error: Gagal menyalin ke clipboard. Coba salin teks di bawah secara manual:\n\n" + csvContent);
+            }
+
+            document.body.removeChild(textarea);
+        }
+
+        // Panggil inisialisasi saat DOM selesai
+        document.addEventListener('DOMContentLoaded', initFirebase);
+    </script>
+    
+    <!-- Memuat Tailwind CSS untuk styling responsif dan modern -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+        }
+        .data-table th, .data-table td {
+            padding: 1rem;
+            text-align: left;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#2563EB', // Biru yang menenangkan
+                        'secondary': '#1D4ED8',
+                    }
+                }
+            }
+        }
+        
+        // Set nilai default form saat DOM dimuat
+        document.addEventListener('DOMContentLoaded', () => {
+            // Set input date/time ke waktu saat ini
+            document.getElementById('inputDate').value = new Date().toISOString().substring(0, 16);
+            
+            // Isi form dengan data template untuk input manual pertama kali
+            if (window.INITIAL_RUN_DATA) { 
+                document.getElementById('inputDistance').value = window.INITIAL_RUN_DATA.distance;
+                document.getElementById('inputDuration').value = window.INITIAL_RUN_DATA.duration;
+                document.getElementById('inputPace').value = window.INITIAL_RUN_DATA.pace;
+                document.getElementById('inputHR').value = window.INITIAL_RUN_DATA.hr;
+                document.getElementById('inputCalories').value = window.INITIAL_RUN_DATA.calories;
+                document.getElementById('inputElevation').value = window.INITIAL_RUN_DATA.elevation;
+            }
+        });
+    </script>
+</head>
+<body class="p-4 md:p-8 min-h-screen flex flex-col items-center">
+
+    <!-- Kontainer Utama -->
+    <div class="w-full max-w-4xl bg-white shadow-2xl rounded-xl p-6 md:p-10">
+        <h1 class="text-3xl font-extrabold text-gray-800 mb-2">Riwayat Lari (Penyimpanan Data Berkelanjutan)</h1>
+        <p class="text-gray-500 mb-4">Unggah *screenshot* lari Anda untuk mengisi formulir secara otomatis, atau masukkan data secara manual.</p>
+        <p class="text-sm text-gray-400 mb-6">User ID Anda: <span id="userIdDisplay" class="font-mono text-xs">...loading...</span> (ID ini digunakan untuk menyimpan data Anda)</p>
+
+        <!-- Bagian Ekstraksi Gambar -->
+        <div class="mb-8 p-6 bg-yellow-100 rounded-lg border border-yellow-300">
+            <h2 class="text-2xl font-bold text-yellow-700 mb-4">1. Ekstraksi Data dari Gambar</h2>
+            <p class="text-sm text-yellow-700 mb-4">Pilih *screenshot* lari Anda (.jpg atau .png) dan tekan 'Ekstrak Data'.</p>
+            <div class="flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-4">
+                <input type="file" id="imageUpload" accept="image/jpeg,image/png" class="flex-grow w-full sm:w-auto p-2 border border-gray-300 rounded-md bg-white">
+                <button 
+                    onclick="extractDataFromImage()"
+                    id="extractButton"
+                    class="w-full sm:w-auto px-6 py-2 bg-yellow-600 text-white font-semibold rounded-lg shadow-md hover:bg-yellow-700 transition duration-300 ease-in-out disabled:opacity-50"
+                >
+                    Ekstrak Data
+                </button>
+            </div>
+            <div id="loadingIndicator" class="hidden mt-4 text-center text-yellow-800 font-medium flex items-center justify-center">
+                <svg class="animate-spin h-5 w-5 mr-3 inline text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Memproses gambar... Ini mungkin memakan waktu beberapa detik.
+            </div>
+        </div>
+
+        <!-- Formulir Input Lari Baru -->
+        <div class="mb-10 p-6 bg-primary/10 rounded-lg border border-primary/20">
+            <h2 class="text-2xl font-bold text-primary mb-4">2. Verifikasi Data & Simpan</h2>
+            <form id="runForm" onsubmit="event.preventDefault(); saveNewRun();">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div>
+                        <label for="inputDistance" class="block text-sm font-medium text-gray-700">Jarak (km)</label>
+                        <input type="number" step="0.01" id="inputDistance" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required>
+                    </div>
+                    <div>
+                        <label for="inputDuration" class="block text-sm font-medium text-gray-700">Durasi (min:detik)</label>
+                        <input type="text" id="inputDuration" placeholder="Contoh: 58:10" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required>
+                    </div>
+                    <div>
+                        <label for="inputPace" class="block text-sm font-medium text-gray-700">Pace (min/km)</label>
+                        <input type="text" id="inputPace" placeholder="Contoh: 11:38" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label for="inputHR" class="block text-sm font-medium text-gray-700">Avg HR (bpm)</label>
+                        <input type="number" id="inputHR" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label for="inputCalories" class="block text-sm font-medium text-gray-700">Kalori (kcal)</label>
+                        <input type="number" id="inputCalories" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label for="inputElevation" class="block text-sm font-medium text-gray-700">El. Gain (m)</label>
+                        <input type="number" id="inputElevation" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="md:col-span-3">
+                        <label for="inputDate" class="block text-sm font-medium text-gray-700">Waktu Lari</label>
+                        <input type="datetime-local" id="inputDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                </div>
+                
+                <button 
+                    type="submit"
+                    id="saveButton"
+                    class="w-full px-6 py-3 bg-primary text-white font-semibold rounded-lg shadow-lg hover:bg-secondary transition duration-300 ease-in-out transform hover:scale-[1.01]"
+                >
+                    Simpan Lari Baru ke Riwayat
+                </button>
+            </form>
+        </div>
+
+        <!-- Riwayat Lari -->
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">3. Riwayat Lari Tersimpan</h2>
+        <div id="runHistoryContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <p class="text-gray-500 italic text-center p-4">Memuat riwayat dari database...</p>
+        </div>
+
+        <!-- Tombol Ekspor Seluruh Riwayat -->
+        <button 
+            onclick="exportToSpreadsheet()"
+            id="exportButton"
+            class="w-full md:w-auto px-6 py-3 bg-green-500 text-white font-semibold rounded-lg shadow-lg hover:bg-green-600 transition duration-300 ease-in-out transform hover:scale-[1.01] flex items-center justify-center space-x-2 hidden"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 11.586V3a1 1 0 112 0v8.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+            <span>Salin SELURUH Riwayat ke Spreadsheet (CSV)</span>
+        </button>
+        <p class="text-xs text-gray-400 mt-2 text-center">Data akan disalin dalam format CSV. Gunakan fitur 'Text to Columns' di Excel jika data tidak rapi.</p>
+    </div>
+
+    <!-- Modal Message Box (Pengganti alert) -->
+    <div id="messageBox" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-lg shadow-2xl max-w-sm w-full p-6 transform transition-all duration-300 scale-100">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Informasi</h3>
+            <p id="messageText" class="text-gray-700 mb-6"></p>
+            <button 
+                onclick="closeMessageBox()"
+                class="w-full px-4 py-2 bg-primary text-white font-medium rounded-lg hover:bg-secondary transition duration-200"
+            >
+                Oke
+            </button>
+        </div>
+    </div>
+</body>
+</html>
